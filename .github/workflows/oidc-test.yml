@@ -26,7 +26,7 @@ name: OIDC Token Exchange Test - JPD1
           id: exchange
           run: |
             RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "https://jpd1.example.com/access/api/v1/oidc/token" \
+              "https://z0oidctenant1.jfrogdev.org/access/api/v1/oidc/token" \
               -H "Content-Type: application/json" \
               -d '{
                 "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
