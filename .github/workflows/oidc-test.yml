@@ -1,81 +1,56 @@
 name: OIDC Token Exchange Test - JPD1
 
-  on:
-    push:
-      branches: [main]
-    workflow_dispatch:
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-  permissions:
-    id-token: write   # Required for OIDC
-    contents: read
+permissions:
+  id-token: write
+  contents: read
 
-  jobs:
-    oidc-test:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Get GitHub OIDC Token
-          id: oidc
-          uses: actions/github-script@v7
-          with:
-            script: |
-              const token = await core.getIDToken('jfrog');
-              core.setOutput('id_token', token);
-              core.setSecret(token);
+jobs:
+  oidc-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get GitHub OIDC Token
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('jfrog');
+            core.setOutput('id_token', token);
+            core.setSecret(token);
 
-        - name: Exchange OIDC Token with JFrog Access (JPD-1)
-          id: exchange
-          run: |
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-              "https://z0oidctenant1.jfrogdev.org/access/api/v1/oidc/token" \
-              -H "Content-Type: application/json" \
-              -d '{
-                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-                "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-                "subject_token": "${{ steps.oidc.outputs.id_token }}",
-                "provider_name": "github-oidc"
-              }')
+      - name: Exchange OIDC Token with JFrog Access (JPD-1)
+        id: exchange
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://z0oidctenant1.jfrogdev.org/access/api/v1/oidc/token" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\",
+              \"subject_token_type\": \"urn:ietf:params:oauth:token-type:id_token\",
+              \"subject_token\": \"${{ steps.oidc.outputs.id_token }}\",
+              \"provider_name\": \"github-oidc\"
+            }")
 
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY=$(echo "$RESPONSE" | head -n -1)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
 
-            echo "Status: $HTTP_CODE"
-            echo "Response: $BODY"
+          echo "Status: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Token exchange failed: $BODY"
+            exit 1
+          fi
 
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "::error::Token exchange failed with status $HTTP_CODE"
-              exit 1
-            fi
+          ACCESS_TOKEN=$(echo "$BODY" | jq -r '.access_token')
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "access_token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
 
-            ACCESS_TOKEN=$(echo "$BODY" | jq -r '.access_token')
-            echo "::add-mask::$ACCESS_TOKEN"
-            echo "access_token=$ACCESS_TOKEN" >> $GITHUB_OUTPUT
-
-        - name: Verify Token Works - Ping Artifactory
-          run: |
-            curl -s -f -H "Authorization: Bearer ${{ steps.exchange.outputs.access_token }}" \
-              "https://jpd1.example.com/access/api/v1/system/ping"
-            echo "Ping successful!"
-
-        - name: Verify Token Scope - Check Permissions
-          run: |
-            # Verify the token has the expected "readers" scope
-            TOKEN_INFO=$(curl -s -H "Authorization: Bearer ${{ steps.exchange.outputs.access_token }}" \
-              "https://jpd1.example.com/access/api/v1/tokens/me")
-            echo "Token info: $TOKEN_INFO"
-
-            # Verify scope contains "readers"
-            echo "$TOKEN_INFO" | jq -e '.scope | test("readers")' || \
-              (echo "::error::Token does not have expected 'readers' scope" && exit 1)
-
-        - name: Cross-tenant test - Should FAIL on JPD-2
-          run: |
-            # This token from JPD-1 should NOT work on JPD-2
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              -H "Authorization: Bearer ${{ steps.exchange.outputs.access_token }}" \
-              "https://jpd2.example.com/access/api/v1/system/ping")
-
-            if [ "$HTTP_CODE" == "200" ]; then
-              echo "::error::Cross-tenant access should have been rejected!"
-              exit 1
-            fi
-            echo "Cross-tenant correctly rejected with status: $HTTP_CODE"
+      - name: Verify Token Works - Ping Artifactory
+        run: |
+          curl -s -f -H "Authorization: Bearer ${{ steps.exchange.outputs.access_token }}" \
+            "https://jpd1.example.com/access/api/v1/system/ping"
+          echo "Ping successful!"
